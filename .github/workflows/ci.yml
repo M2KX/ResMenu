@@ -11,7 +11,6 @@ jobs:
       SERVER_IP: ${{ secrets.SERVER_IP }}
       SERVER_USER: ${{ secrets.SERVER_USER }}
       SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
-      SERVER_PATH: ${{ secrets.SERVER_PATH }}
 
     steps:
       - name: Checkout code
@@ -22,7 +21,6 @@ jobs:
         run: |
           echo "SERVER_IP:      ${SERVER_IP:-<empty>}"
           echo "SERVER_USER:    ${SERVER_USER:-<empty>}"
-          echo "SERVER_PATH:    ${SERVER_PATH:-<empty>}"
           if [ -z "$SERVER_IP" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_PASSWORD" ]; then
             echo "❌ One or more required secrets are missing (SERVER_IP / SERVER_USER / SERVER_PASSWORD)."
             exit 1
@@ -77,7 +75,7 @@ jobs:
           ls -la
           echo "Archive ready: deploy.tar.gz"
 
-      # ---------- Server connection & deploy ----------
+      # ---------- Server connection & deploy via Docker ----------
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
 
@@ -90,13 +88,13 @@ jobs:
           sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" 'bash -s' << "EOF"
           set -e
 
-          echo "[*] Using SERVER_PATH: '"$SERVER_PATH"'"
+          DEPLOY_PATH="/etc/vhost/menufy"
+          echo "[*] Using DEPLOY_PATH: $DEPLOY_PATH"
 
-          # Make sure target directory exists
-          mkdir -p "$SERVER_PATH"
+          mkdir -p "$DEPLOY_PATH"
 
           echo "[*] Extracting new build..."
-          tar xzf /tmp/resmenu_deploy.tar.gz -C "$SERVER_PATH"
+          tar xzf /tmp/resmenu_deploy.tar.gz -C "$DEPLOY_PATH"
 
           echo "[*] Ensuring Docker is installed..."
           if ! command -v docker >/dev/null 2>&1; then
@@ -114,25 +112,18 @@ jobs:
             --name menufy-backend \
             --restart=always \
             -p 5000:5000 \
-            -v "$SERVER_PATH/publish-backend:/app" \
+            -v "$DEPLOY_PATH/publish-backend:/app" \
             -w /app \
             mcr.microsoft.com/dotnet/aspnet:8.0 \
             dotnet Menufy.API.dll
 
           echo "[*] Starting frontend container..."
-          # frontend extracted as $SERVER_PATH/frontend/.output
-          # we mount $SERVER_PATH/frontend as /app and run Nitro server
-          mkdir -p "$SERVER_PATH/frontend"
-          if [ ! -d "$SERVER_PATH/frontend/.output" ]; then
-            # If only frontend/.output exists, ensure parent dir
-            mv "$SERVER_PATH/frontend/.output" "$SERVER_PATH/frontend/.output" 2>/dev/null || true
-          fi
-
+          # frontend extracted as $DEPLOY_PATH/frontend/.output
           docker run -d \
             --name menufy-frontend \
             --restart=always \
             -p 3000:3000 \
-            -v "$SERVER_PATH/frontend:/app" \
+            -v "$DEPLOY_PATH/frontend:/app" \
             -w /app \
             node:20 \
             node .output/server/index.mjs
@@ -143,4 +134,4 @@ jobs:
 
       - name: Done
         run: |
-          echo "Deployed to: $SERVER_PATH"
+          echo "Deployed to /etc/vhost/menufy"

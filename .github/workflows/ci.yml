@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
+  build-test-deploy:
     runs-on: ubuntu-latest
 
     env:
@@ -17,12 +17,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ---------- Validate secrets ----------
       - name: Check required secrets
         run: |
           echo "SERVER_IP:      ${SERVER_IP:-<empty>}"
           echo "SERVER_USER:    ${SERVER_USER:-<empty>}"
           echo "SERVER_PATH:    ${SERVER_PATH:-<empty>}"
-          # Don't print the password value for safety
           if [ -z "$SERVER_IP" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_PASSWORD" ]; then
             echo "❌ One or more required secrets are missing (SERVER_IP / SERVER_USER / SERVER_PASSWORD)."
             exit 1
@@ -44,8 +44,13 @@ jobs:
           cd backend
           dotnet build Menufy.sln -c Release --no-restore
 
+      - name: Publish backend API
+        run: |
+          cd backend
+          dotnet publish src/Menufy.API/Menufy.API.csproj -c Release -o ../publish-backend
+          ls -la ../publish-backend
 
-      # ---------- Frontend (Node / Nuxt) ----------
+      # ---------- Frontend (Nuxt) ----------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -62,15 +67,31 @@ jobs:
         run: |
           cd frontend
           npm run build
+          ls -la .output
 
-      # ---------- Server connection test (using password) ----------
+      # ---------- Prepare deploy archive ----------
+      - name: Create deploy archive
+        run: |
+          # We are in repo root here
+          tar czf deploy.tar.gz publish-backend frontend/.output
+          ls -la
+          echo "Archive ready: deploy.tar.gz"
+
+      # ---------- Server connection & deploy ----------
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
 
-      - name: Test SSH connection to server
+      - name: Deploy to server
         run: |
-          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "echo Connected to \$(hostname); pwd"
+          # Ensure target directory exists
+          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "mkdir -p '$SERVER_PATH'"
+
+          # Copy archive to server
+          sshpass -p "$SERVER_PASSWORD" scp -o StrictHostKeyChecking=no deploy.tar.gz "$SERVER_USER@$SERVER_IP:/tmp/resmenu_deploy.tar.gz"
+
+          # Extract on server into SERVER_PATH
+          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "tar xzf /tmp/resmenu_deploy.tar.gz -C '$SERVER_PATH'"
 
       - name: Show server path (debug)
         run: |
-          echo "Will deploy to: $SERVER_PATH"
+          echo "Deployed to: $SERVER_PATH"

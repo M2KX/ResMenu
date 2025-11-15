@@ -81,17 +81,66 @@ jobs:
       - name: Install sshpass
         run: sudo apt-get update && sudo apt-get install -y sshpass
 
-      - name: Deploy to server
+      - name: Deploy and run with Docker on server
         run: |
-          # Ensure target directory exists
-          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "mkdir -p '$SERVER_PATH'"
-
           # Copy archive to server
           sshpass -p "$SERVER_PASSWORD" scp -o StrictHostKeyChecking=no deploy.tar.gz "$SERVER_USER@$SERVER_IP:/tmp/resmenu_deploy.tar.gz"
 
-          # Extract on server into SERVER_PATH
-          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "tar xzf /tmp/resmenu_deploy.tar.gz -C '$SERVER_PATH'"
+          # On server: extract + ensure Docker + run containers
+          sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" 'bash -s' << "EOF"
+          set -e
 
-      - name: Show server path (debug)
+          echo "[*] Using SERVER_PATH: '"$SERVER_PATH"'"
+
+          # Make sure target directory exists
+          mkdir -p "$SERVER_PATH"
+
+          echo "[*] Extracting new build..."
+          tar xzf /tmp/resmenu_deploy.tar.gz -C "$SERVER_PATH"
+
+          echo "[*] Ensuring Docker is installed..."
+          if ! command -v docker >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y docker.io
+            systemctl enable --now docker
+          fi
+
+          echo "[*] Stopping old containers (if any)..."
+          docker rm -f menufy-backend || true
+          docker rm -f menufy-frontend || true
+
+          echo "[*] Starting backend container..."
+          docker run -d \
+            --name menufy-backend \
+            --restart=always \
+            -p 5000:5000 \
+            -v "$SERVER_PATH/publish-backend:/app" \
+            -w /app \
+            mcr.microsoft.com/dotnet/aspnet:8.0 \
+            dotnet Menufy.API.dll
+
+          echo "[*] Starting frontend container..."
+          # frontend extracted as $SERVER_PATH/frontend/.output
+          # we mount $SERVER_PATH/frontend as /app and run Nitro server
+          mkdir -p "$SERVER_PATH/frontend"
+          if [ ! -d "$SERVER_PATH/frontend/.output" ]; then
+            # If only frontend/.output exists, ensure parent dir
+            mv "$SERVER_PATH/frontend/.output" "$SERVER_PATH/frontend/.output" 2>/dev/null || true
+          fi
+
+          docker run -d \
+            --name menufy-frontend \
+            --restart=always \
+            -p 3000:3000 \
+            -v "$SERVER_PATH/frontend:/app" \
+            -w /app \
+            node:20 \
+            node .output/server/index.mjs
+
+          echo "[*] Containers running:"
+          docker ps
+          EOF
+
+      - name: Done
         run: |
           echo "Deployed to: $SERVER_PATH"

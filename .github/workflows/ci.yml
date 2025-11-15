@@ -17,6 +17,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check required secrets
+        run: |
+          echo "SERVER_IP:      ${SERVER_IP:-<empty>}"
+          echo "SERVER_USER:    ${SERVER_USER:-<empty>}"
+          echo "SERVER_PATH:    ${SERVER_PATH:-<empty>}"
+          # Don't print the password value for safety
+          if [ -z "$SERVER_IP" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_PASSWORD" ]; then
+            echo "❌ One or more required secrets are missing (SERVER_IP / SERVER_USER / SERVER_PASSWORD)."
+            exit 1
+          fi
+
       # ---------- Backend (.NET) ----------
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -59,7 +70,7 @@ jobs:
       - name: Test SSH connection to server
         run: |
           sshpass -p "$SERVER_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_IP" "echo Connected to \$(hostname); pwd"
-      
+
       - name: Show server path (debug)
         run: |
           echo "Will deploy to: $SERVER_PATH"
